@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: wenliban-campus-companion
+    runtime: static
+    buildCommand: echo "文理伴网页已就绪"
+    staticPublishPath: ./public
+    headers:
+      - path: /sw.js
+        name: Cache-Control
+        value: no-cache
+
