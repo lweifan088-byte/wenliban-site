@@ -20,5 +20,5 @@
 
 ## 发布
 
-网站为纯静态页面，不需要单独维护服务器、数据库或学校系统接口。Render 配置发布 `public/` 目录，网址支持 HTTPS 与手机桌面安装。社团和宿舍匹配资料可按参赛展示需求继续更新。
+访问地址：[https://lweifan088-byte.github.io/wenliban-site/](https://lweifan088-byte.github.io/wenliban-site/)。网站通过 GitHub Pages 发布，手机和电脑浏览器均可访问；手机浏览器可添加到主屏幕。社团和宿舍匹配资料可按参赛展示需求继续更新。
 
