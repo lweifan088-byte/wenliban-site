@@ -121,6 +121,14 @@
     if (installPrompt) { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $('#installPwaButton')?.remove(); }
     else alert('可在浏览器菜单中选择“添加到主屏幕”或“安装应用”。');
   });
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  $('#homeSearchForm')?.addEventListener('submit', event => {
+    event.preventDefault();
+    const query = $('#homeSearchInput')?.value.trim();
+    if (!query) return;
+    window.go?.('forum');
+    const search = $('#postSearch');
+    if (search) { search.value = query; search.dispatchEvent(new Event('input', {bubbles:true})); }
+  });
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
 

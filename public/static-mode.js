@@ -16,7 +16,7 @@
   const digest = async text => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(n => n.toString(16).padStart(2, '0')).join('');
   const answerFor = async question => {
     let items = [];
-    try { const response = await originalFetch('/data/campus-knowledge.json'); if (response.ok) items = await response.json(); } catch {}
+    try { const response = await originalFetch(new URL('./data/campus-knowledge.json', document.baseURI)); if (response.ok) items = await response.json(); } catch {}
     const q = question.toLowerCase();
     const terms = new Set([...q].filter(c => /[\p{L}\p{N}]/u.test(c)));
     for (let i = 0; i < q.length - 1; i++) terms.add(q.slice(i, i + 2));
@@ -112,4 +112,5 @@
     })).observe(document.body, { childList: true, characterData: true, subtree: true });
   }, { once: true });
 })();
+
 
