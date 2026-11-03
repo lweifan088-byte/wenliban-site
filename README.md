@@ -1,24 +1,19 @@
-# 文理伴
+# 文理伴校园生活服务平台
 
-文理伴是一站式校园生活服务平台，面向新生融入、室友协作、校园互助与社团交流。
+校园生活服务平台，包含校园助手、学生社区、社团资料、好友消息与管理工作台。
 
-## 页面功能
+## 部署方式
 
-- 首页校园助手：检索西安文理学院公开学校概况、校训和校区信息，并提供入学准备与生活建议。
-- 室友匹配：结合专业、班级、作息、卫生习惯和社交偏好，计算宿舍适配度并给出相处建议。
-- 校园社区：分类浏览、发帖、图文视频、评论、点赞、收藏、官方通知与管理操作。
-- 消息与个人空间：好友申请、聊天、社团推荐、头像、兴趣和资料设置。
-- 四项手机导航与 PWA 安装：适配手机浏览器和桌面浏览器。
+- GitHub Pages 当前发布 `public/` 静态体验页，数据仅保存在当前浏览器，不能提供跨设备账号或校园管理服务。
+- 跨设备服务端版本使用根目录 Node.js 应用和 PostgreSQL，Render 部署文件见 `render.yaml`。部署需要付费 Web Service 与数据库，并设置首位管理员账号和密码。
+- 详细账号、权限、数据边界与学校接入要求见 [CAMPUS_OPERATIONS.md](CAMPUS_OPERATIONS.md)。
 
-## 账号
+## 本机启动
 
-登录页提供学生与管理员快捷账号；也可以注册学生账号。学生快捷账号为 `student01`、`student02`、`student03`，密码均为 `wenli2026`；管理员账号 `admin`，密码为 `admin2026`。
+需要 Node.js 20+ 和 PostgreSQL。复制 `.env.example` 为 `.env`，设置数据库连接；正式部署还须设置 `NODE_ENV=production`、`ADMIN_USERNAME` 和至少 12 位的 `ADMIN_PASSWORD`。运行 `npm install` 后执行 `npm start`，访问 `http://localhost:3000`。数据库迁移会在启动时自动执行。
 
-## 内容保存
+当前不连接学校学籍库或统一认证，学号/工号仅作为账号名称，不代表校方核验。室友测评仍是习惯匹配建议；正式宿舍分配需要学校宿舍与床位数据、管理人员复核。
 
-账号、个人资料、社区内容、好友关系和聊天记录保存在当前浏览器中。方便在校赛现场快速登录和体验；更换设备或浏览器时不会自动同步。
+## 开源参考
 
-## 发布
-
-访问地址：[https://lweifan088-byte.github.io/wenliban-site/](https://lweifan088-byte.github.io/wenliban-site/)。网站通过 GitHub Pages 发布，手机和电脑浏览器均可访问；手机浏览器可添加到主屏幕。社团和宿舍匹配资料可按参赛展示需求继续更新。
-
+权限和社团审核流程参考 [StudentSpot](https://github.com/pawelkwaczynski/student_spot)（MIT）与 [student-council](https://github.com/Hiba-Malkan/student-council)（MIT）的公开设计，本项目没有复制其源代码。

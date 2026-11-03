@@ -1,5 +1,5 @@
 import { createServer } from 'node:http';
-import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import { randomUUID, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
 import { readFile, readFileSync } from 'node:fs';
 import { readFile as readTextFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -12,6 +12,8 @@ const DATA_FILE = join(ROOT, 'data', 'campus-knowledge.json');
 const USER_DATA_DIR = resolve(process.env.DATA_DIR || join(ROOT, 'data'));
 const USERS_FILE = join(USER_DATA_DIR, 'users.json');
 const COMMUNITY_FILE = join(USER_DATA_DIR, 'community.json');
+const MIGRATION_FILE = join(ROOT, 'migrations', '001_campus_core.sql');
+let pool = null;
 
 function loadDotEnv() {
   const file = join(ROOT, '.env');
@@ -23,9 +25,12 @@ function loadDotEnv() {
   }
 }
 loadDotEnv();
+if (process.env.DATABASE_URL) { const { Pool } = await import('pg'); pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.PGSSLMODE === 'disable' ? false : process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false, max: Number(process.env.PGPOOL_MAX || 10) }); }
+if (process.env.NODE_ENV === 'production' && !pool) throw new Error('生产环境必须配置 DATABASE_URL，避免账号与校园数据落到临时文件。');
 
 const MIME = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.json': 'application/json; charset=utf-8', '.webmanifest': 'application/manifest+json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
 const MAX_BODY = 520_000;
+const MAX_MEDIA = 15 * 1024 * 1024;
 const DEMO_USERS = new Map([
   ['student01', { password: 'wenli2026', role: 'student', displayName: '林同学' }],
   ['student02', { password: 'wenli2026', role: 'student', displayName: '周同学' }],
@@ -43,17 +48,48 @@ const DEMO_PROFILES = new Map([
 const sessions = new Map();
 const SEED_AUTHORS = new Map([['迎新志愿者','club_volunteer'],['小文','student01'],['住宿同学','student02'],['文理伴小助手','student03'],['摄影社','club_photo'],['新同学','student04'],['校园管理端','admin']]);
 const SESSION_TTL = 8 * 60 * 60 * 1000;
-function sessionFor(req) {
+async function sessionFor(req) {
   const cookie = req.headers.cookie || '';
   const token = cookie.split(';').map(x => x.trim()).find(x => x.startsWith('wenliban_session='))?.split('=').slice(1).join('=');
+  if(pool&&token){const {rows}=await pool.query('SELECT s.token_hash,u.username,u.role,u.display_name AS \"displayName\",u.club_id AS \"clubId\",u.club_name AS \"clubName\" FROM campus_sessions s JOIN campus_users u USING(username) WHERE s.token_hash=$1 AND s.expires_at>NOW() AND u.active=TRUE',[createHash('sha256').update(token).digest('hex')]);if(!rows[0])return null;return {...rows[0],token};}
   const session = token && sessions.get(token);
   if (!session || session.expiresAt < Date.now()) { if (token) sessions.delete(token); return null; }
   return { token, ...session };
 }
 
 async function registeredUsers() {
+  if (pool) {
+    const { rows } = await pool.query('SELECT username, display_name AS "displayName", role, club_id AS "clubId", club_name AS "clubName", password_salt AS salt, password_hash AS hash, profile, app_state AS "appState", created_at AS "createdAt", active FROM campus_users');
+    return rows.filter(row => row.active).map(row => ({ ...row, createdAt: row.createdAt?.toISOString?.() || row.createdAt }));
+  }
   try { return JSON.parse(await readFileAsync(USERS_FILE, 'utf8')); }
   catch (error) { if (error.code === 'ENOENT') return []; throw error; }
+}
+
+async function writeUsers(users) {
+  if (!pool) {
+    await mkdir(USER_DATA_DIR, { recursive: true });
+    return writeFile(USERS_FILE, JSON.stringify(users, null, 2), { encoding: 'utf8', mode: 0o600 });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const user of users) {
+      await client.query(`INSERT INTO campus_users(username,display_name,role,club_id,club_name,password_salt,password_hash,profile,app_state,active,created_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9::jsonb,$10,COALESCE($11,NOW()))
+        ON CONFLICT(username) DO UPDATE SET display_name=EXCLUDED.display_name,role=EXCLUDED.role,club_id=EXCLUDED.club_id,club_name=EXCLUDED.club_name,
+        password_salt=COALESCE(EXCLUDED.password_salt,campus_users.password_salt),password_hash=COALESCE(EXCLUDED.password_hash,campus_users.password_hash),profile=EXCLUDED.profile,app_state=EXCLUDED.app_state,active=EXCLUDED.active`,
+        [user.username, user.displayName, user.role, user.clubId || null, user.clubName || null, user.salt || null, user.hash || null, JSON.stringify(user.profile || {}), JSON.stringify(user.appState || {}), user.active !== false, user.createdAt || null]);
+    }
+    await client.query('COMMIT');
+  } catch (error) { await client.query('ROLLBACK'); throw error; }
+  finally { client.release(); }
+}
+
+async function writeAudit(actor, action, targetType, targetId, details = {}) {
+  if (!pool) return;
+  await pool.query('INSERT INTO campus_audit(id,actor,action,target_type,target_id,details) VALUES($1,$2,$3,$4,$5,$6::jsonb)',
+    [randomUUID(), actor?.username || 'system', action, targetType, String(targetId || ''), JSON.stringify(details)]);
 }
 
 function passwordHash(password, salt = randomBytes(16).toString('hex')) {
@@ -71,7 +107,7 @@ async function findUser(username) {
   const users = await registeredUsers();
   const registered = users.find(user => user.username === username) || null;
   const demo = DEMO_USERS.get(username);
-  if (demo && (process.env.NODE_ENV !== 'production' || demo.role !== 'admin')) return { ...demo, ...registered, password: demo.password, username };
+  if (demo && process.env.NODE_ENV !== 'production') return { ...demo, ...registered, password: demo.password, username };
   return registered;
 }
 
@@ -83,18 +119,20 @@ async function provisionAdmin() {
   const users = await registeredUsers();
   if (users.some(user => user.username === username)) return;
   users.push({ username, displayName: '校园管理员', role: 'admin', ...passwordHash(password), createdAt: new Date().toISOString() });
-  await mkdir(USER_DATA_DIR, { recursive: true });
-  await writeFile(USERS_FILE, JSON.stringify(users, null, 2), { encoding: 'utf8', mode: 0o600 });
+  await writeUsers(users);
 }
 
-function establishSession(res, user) {
+async function establishSession(res, user) {
   const token = randomUUID();
-  sessions.set(token, { username: user.username, role: user.role, displayName: user.displayName, clubId: user.clubId || null, clubName: user.clubName || null, expiresAt: Date.now() + SESSION_TTL });
+  const expiresAt=Date.now()+SESSION_TTL;
+  if(pool) await pool.query('INSERT INTO campus_sessions(token_hash,username,expires_at) VALUES($1,$2,to_timestamp($3/1000.0))',[createHash('sha256').update(token).digest('hex'),user.username,expiresAt]);
+  else sessions.set(token, { username: user.username, role: user.role, displayName: user.displayName, clubId: user.clubId || null, clubName: user.clubName || null, expiresAt });
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   res.setHeader('set-cookie', `wenliban_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_TTL / 1000}${secure}`);
 }
 const publicUser = user => ({ username: user.username, role: user.role, displayName: user.displayName, clubId: user.clubId || null, clubName: user.clubName || null });
 async function readCommunity() {
+  if(pool){const {rows}=await pool.query('SELECT data FROM campus_community WHERE id=1');if(rows[0])return rows[0].data;try{const legacy=JSON.parse(await readFileAsync(COMMUNITY_FILE,'utf8'));await writeCommunity(legacy);return legacy;}catch(error){if(error.code!=='ENOENT')throw error;const empty={posts:[],clubs:{},updatedAt:new Date().toISOString()};await writeCommunity(empty);return empty;}}
   try { return JSON.parse(await readFileAsync(COMMUNITY_FILE, 'utf8')); }
   catch (error) {
     if (error.code !== 'ENOENT') throw error;
@@ -111,6 +149,7 @@ async function readCommunity() {
   }
 }
 async function writeCommunity(value) {
+  if(pool){await pool.query('INSERT INTO campus_community(id,data,updated_at) VALUES(1,$1::jsonb,NOW()) ON CONFLICT(id) DO UPDATE SET data=EXCLUDED.data,updated_at=NOW()',[JSON.stringify(value)]);return;}
   await mkdir(USER_DATA_DIR, { recursive: true });
   await writeFile(COMMUNITY_FILE, JSON.stringify(value), { encoding: 'utf8', mode: 0o600 });
 }
@@ -131,6 +170,13 @@ async function readBody(req) {
   }
   try { return JSON.parse(raw || '{}'); }
   catch { throw Object.assign(new Error('请求格式无效'), { status: 400 }); }
+}
+
+async function readBinary(req, limit = MAX_MEDIA) {
+  const chunks = []; let size = 0;
+  for await (const chunk of req) { size += chunk.length; if (size > limit) throw Object.assign(new Error('文件超过允许大小。'), { status: 413 }); chunks.push(chunk); }
+  if (!size) throw Object.assign(new Error('文件内容为空。'), { status: 400 });
+  return Buffer.concat(chunks, size);
 }
 
 function terms(text) {
@@ -232,11 +278,19 @@ function serveStatic(req, res) {
   });
 }
 
-const server = createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { ok: true, aiConfigured: providerReady(), knowledgeItems: await retrieveCount(), demoAccounts: process.env.NODE_ENV !== 'production', deployment: 'standalone-web' });
-  if (req.method === 'GET' && req.url === '/api/me') { const session = sessionFor(req); return json(res, 200, { user: session ? publicUser(session) : null }); }
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch(error => {
+    console.error('请求处理失败:', error.message);
+    if (res.headersSent) return res.destroy(error);
+    return json(res, 500, { error: '服务暂时不可用，请稍后重试。' });
+  });
+});
+
+async function handleRequest(req, res) {
+  if (req.method === 'GET' && req.url === '/api/health') return json(res, 200, { ok: true, aiConfigured: providerReady(), knowledgeItems: await retrieveCount(), demoAccounts: process.env.NODE_ENV !== 'production', deployment: 'standalone-web', storage: pool ? 'postgres' : 'local-file' });
+  if (req.method === 'GET' && req.url === '/api/me') { const session = await sessionFor(req); return json(res, 200, { user: session ? publicUser(session) : null }); }
   if (req.method === 'GET' && req.url.startsWith('/api/profile/')) {
-    const viewer = sessionFor(req);
+    const viewer = await sessionFor(req);
     if (!viewer) return json(res, 401, { error: '请先登录。' });
     const username = decodeURIComponent(req.url.slice('/api/profile/'.length)).trim().toLowerCase();
     const target = await findUser(username);
@@ -257,7 +311,7 @@ const server = createServer(async (req, res) => {
     return json(res, 200, { user: publicUser(target), profile: visible });
   }
   if (req.method === 'PUT' && req.url === '/api/profile') {
-    const session = sessionFor(req);
+    const session = await sessionFor(req);
     if (!session) return json(res, 401, { error: '请先登录。' });
     try {
       const body = await readBody(req);
@@ -278,15 +332,70 @@ const server = createServer(async (req, res) => {
         users.push(user);
       }
       user.profile = profile;
-      await writeFile(USERS_FILE, JSON.stringify(users, null, 2), { encoding: 'utf8', mode: 0o600 });
+      await writeUsers(users);
+      await writeAudit(session,'profile_updated','user',session.username,{});
       return json(res, 200, { ok: true });
     } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '资料保存失败。' }); }
+  }
+  if (req.method === 'GET' && req.url === '/api/account-state') {
+    const session = await sessionFor(req);
+    if (!session) return json(res, 401, { error: '请先登录。' });
+    if (pool) {
+      const { rows } = await pool.query('SELECT app_state AS state FROM campus_users WHERE username=$1 AND active=TRUE', [session.username]);
+      return json(res, 200, { state: rows[0]?.state || null });
+    }
+    const user = (await registeredUsers()).find(item => item.username === session.username);
+    return json(res, 200, { state: user?.appState || null });
+  }
+  if (req.method === 'PUT' && req.url === '/api/account-state') {
+    const session = await sessionFor(req);
+    if (!session) return json(res, 401, { error: '请先登录。' });
+    try {
+      const body = await readBody(req), value = body.state;
+      if (!value || typeof value !== 'object' || Array.isArray(value) || Buffer.byteLength(JSON.stringify(value)) > 450_000) return json(res, 400, { error: '个人空间数据格式无效或过大。' });
+      if (pool) await pool.query('UPDATE campus_users SET app_state=$1::jsonb WHERE username=$2 AND active=TRUE', [JSON.stringify(value), session.username]);
+      else { const users = await registeredUsers(), user = users.find(item => item.username === session.username); if (!user) return json(res, 404, { error: '账号不存在。' }); user.appState = value; await writeUsers(users); }
+      return json(res, 200, { ok: true });
+    } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '个人空间保存失败。' }); }
+  }
+  if (req.method === 'POST' && req.url === '/api/media') {
+    const session = await sessionFor(req);
+    if (!session) return json(res, 401, { error: '请先登录。' });
+    if (!pool) return json(res, 503, { error: '共享媒体存储尚未启用，请配置数据库后重试。' });
+    try {
+      const mime = String(req.headers['x-media-type'] || '').toLowerCase().split(';')[0].trim();
+      const allowed = /^(image\/(jpeg|png|gif|webp|avif)|video\/(mp4|webm|quicktime))$/;
+      if (!allowed.test(mime)) return json(res, 415, { error: '只支持 JPG、PNG、GIF、WebP、AVIF、MP4、WebM 或 MOV 文件。' });
+      const max = mime.startsWith('video/') ? 15 * 1024 * 1024 : 5 * 1024 * 1024;
+      const data = await readBinary(req, max), id = randomUUID();
+      const name = String(req.headers['x-media-name'] || 'upload').replace(/[\\/\r\n\0]/g, '_').slice(0, 180) || 'upload';
+      await pool.query('INSERT INTO campus_media(id,owner,mime_type,filename,data,size_bytes) VALUES($1,$2,$3,$4,$5,$6)', [id, session.username, mime, name, data, data.length]);
+      return json(res, 201, { id, type: mime.startsWith('video/') ? 'video' : 'image', name });
+    } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '媒体上传失败。' }); }
+  }
+  if (req.method === 'GET' && req.url.startsWith('/api/media/')) {
+    const session = await sessionFor(req);
+    if (!session) return json(res, 401, { error: '请先登录。' });
+    if (!pool) return json(res, 404, { error: '媒体不存在。' });
+    try {
+      const id = decodeURIComponent(req.url.slice('/api/media/'.length));
+      const { rows } = await pool.query('SELECT owner,mime_type,data,size_bytes FROM campus_media WHERE id=$1', [id]);
+      if (!rows[0]) return json(res, 404, { error: '媒体不存在。' });
+      if (rows[0].owner !== session.username) {
+        const community = await readCommunity();
+        const publicAttachment = (community.posts || []).some(post => post.media?.id === id || (post.comments || []).some(comment => comment.media?.id === id));
+        const privateAttachment = Object.entries(community.chats || {}).some(([key, messages]) => key.split('::').includes(session.username) && (community.friendships?.[session.username] || []).some(peer => key.split('::').includes(peer)) && (messages || []).some(message => message.media?.id === id));
+        if (!publicAttachment && !privateAttachment) return json(res, 404, { error: '媒体不存在。' });
+      }
+      res.writeHead(200, { 'content-type': rows[0].mime_type, 'content-length': rows[0].size_bytes, 'cache-control': 'private, max-age=3600', 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+      return res.end(rows[0].data);
+    } catch { return json(res, 400, { error: '媒体地址无效。' }); }
   }
   if (req.method === 'POST' && req.url === '/api/login') {
     try { const body = await readBody(req); const username = String(body.username || '').trim().toLowerCase(); const password = String(body.password || ''); const record = await findUser(username);
       const valid = record && (record.password ? password === record.password : verifyPassword(password, record));
       if (!valid) return json(res, 401, { error: '账号或密码不正确。' });
-      establishSession(res, record);
+      await establishSession(res, record);
       return json(res, 200, { user: publicUser(record) });
     } catch (error) { return json(res, error.status || 400, { error: error.message || '登录请求无效。' }); }
   }
@@ -298,44 +407,54 @@ const server = createServer(async (req, res) => {
       const displayName = String(body.displayName || '').trim();
       const password = String(body.password || '');
       const clubName = String(body.clubName || '').trim();
-      if (!/^[a-z0-9_-]{4,20}$/.test(username)) return json(res, 400, { error: '账号需为 4–20 位字母、数字、下划线或短横线。' });
+      const adminInvite = String(body.adminInvite || '');
+      if (!/^[a-z0-9_-]{4,32}$/.test(username)) return json(res, 400, { error: '账号需为 4–32 位字母、数字、下划线或短横线。' });
       if (!['student', 'admin', 'club'].includes(role)) return json(res, 400, { error: '请选择有效的注册身份。' });
       if (role === 'club' && (clubName.length < 2 || clubName.length > 40)) return json(res, 400, { error: '请填写 2–40 个字的社团名称。' });
-      if (displayName.length < 2 || displayName.length > 20) return json(res, 400, { error: '昵称需为 2–20 个字符。' });
-      if (password.length < 8 || password.length > 72) return json(res, 400, { error: '密码需为 8–72 个字符。' });
-      if (DEMO_USERS.has(username) || (await registeredUsers()).some(user => user.username === username)) return json(res, 409, { error: '这个账号已被注册，请更换一个账号。' });
+      if (displayName.length < 2 || displayName.length > 40) return json(res, 400, { error: '昵称需为 2–40 个字符。' });
+      if (password.length < 10 || password.length > 72) return json(res, 400, { error: '密码需为 10–72 个字符。' });
+      if (role === 'admin' && (pool || process.env.NODE_ENV === 'production') && (!process.env.ADMIN_INVITE_CODE || adminInvite !== process.env.ADMIN_INVITE_CODE)) return json(res, 403, { error: '管理老师账号由学校管理员开通，请使用有效的邀请码。' });
+      const duplicate = pool ? (await pool.query('SELECT 1 FROM campus_users WHERE username=$1',[username])).rowCount > 0 : (await registeredUsers()).some(user=>user.username===username);
+      if (DEMO_USERS.has(username) || duplicate) return json(res, 409, { error: '这个账号已被注册，请更换一个账号。' });
       const secured = passwordHash(password);
       const users = await registeredUsers();
-      const user = { username, displayName, role, ...(role === 'club' ? { clubId: `club-${username}`, clubName } : {}), ...secured, createdAt: new Date().toISOString() };
+      const active = role !== 'club' || !pool;
+      const user = { username, displayName: role==='club'?clubName:displayName, role, ...(role === 'club' ? { clubId: `club-${username}`, clubName } : {}), ...secured, active, createdAt: new Date().toISOString() };
       users.push(user);
-      await mkdir(USER_DATA_DIR, { recursive: true });
-      await writeFile(USERS_FILE, JSON.stringify(users, null, 2), { encoding: 'utf8', mode: 0o600 });
+      await writeUsers(users);
+      await writeAudit(user,role==='club'?'club_registration_pending':'account_registered','user',username,{role});
       if (role === 'club') {
         const community = await readCommunity();
         community.clubs = community.clubs || {};
-        community.clubs[user.clubId] = community.clubs[user.clubId] || { id: user.clubId, name: clubName, founded: new Date().getFullYear() + ' 年', about: '', requirements: '', officers: [], activities: [], plans: [], owner: username };
+        community.clubs[user.clubId] = { id:user.clubId,name:clubName,founded:new Date().getFullYear()+' 年',about:'',requirements:'',officers:[],activities:[],plans:[],owner:username,status:'pending' };
         await writeCommunity(community);
+        return json(res, 202, { pending:true, message:'社团账号申请已提交，管理员审核通过后即可登录。' });
       }
-      establishSession(res, user);
+      await establishSession(res, user);
       return json(res, 201, { user: publicUser(user) });
     } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '注册暂时失败，请稍后重试。' }); }
   }
-  if (req.method === 'POST' && req.url === '/api/logout') { const session = sessionFor(req); if (session) sessions.delete(session.token); res.setHeader('set-cookie', 'wenliban_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); return json(res, 200, { ok: true }); }
+  if (req.method === 'POST' && req.url === '/api/logout') { const session = await sessionFor(req); if (session) { if(pool) await pool.query('DELETE FROM campus_sessions WHERE token_hash=$1',[createHash('sha256').update(session.token).digest('hex')]); else sessions.delete(session.token); } res.setHeader('set-cookie', 'wenliban_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0'); return json(res, 200, { ok: true }); }
   if (req.url === '/api/community' && req.method === 'GET') {
-    if (!sessionFor(req)) return json(res, 401, { error: '请先登录。' });
+    if (!await sessionFor(req)) return json(res, 401, { error: '请先登录。' });
     try {
-      const session = sessionFor(req);
+      const session = await sessionFor(req);
       const community = await readCommunity();
       community.clubs = community.clubs || {};
       for (const [id, club] of Object.entries(community.clubs)) {
         if (session.role !== 'admin' && !(session.role === 'club' && session.clubId === id)) delete club.applications;
       }
-      return json(res, 200, community);
+      const visible = JSON.parse(JSON.stringify(community));
+      const allFriendships = community.friendships || {};
+      visible.friendships = { [session.username]: allFriendships[session.username] || [] };
+      visible.friendRequests = (community.friendRequests || []).filter(item => item.from === session.username || item.to === session.username);
+      visible.chats = Object.fromEntries(Object.entries(community.chats || {}).filter(([key]) => key.split('::').includes(session.username)));
+      return json(res, 200, visible);
     }
     catch { return json(res, 500, { error: '校园社区暂时无法读取。' }); }
   }
   if (req.url === '/api/community' && req.method === 'PUT') {
-    const session = sessionFor(req);
+    const session = await sessionFor(req);
     if (!session) return json(res, 401, { error: '请先登录。' });
     try {
       const next = await readBody(req);
@@ -347,34 +466,120 @@ const server = createServer(async (req, res) => {
         if (session.role === 'club' && next.clubs[session.clubId]) {
           const own = next.clubs[session.clubId];
           const old = previous.clubs?.[session.clubId] || {};
-          if (own && old.owner === session.username) next.clubs[session.clubId] = { ...old, about: String(own.about || '').slice(0, 1000), requirements: String(own.requirements || '').slice(0, 1000), officers: Array.isArray(own.officers) ? own.officers.slice(0, 30) : old.officers, activities: Array.isArray(own.activities) ? own.activities.slice(0, 30) : old.activities, plans: Array.isArray(own.plans) ? own.plans.slice(0, 30) : old.plans };
+          if (own && old.owner === session.username) {
+            const submitted=Array.isArray(own.officers)?own.officers.slice(0,30):old.officers||[];
+            const accounts=new Map((await registeredUsers()).map(user=>[user.username,user]));
+            const officers=[];
+            for(const person of submitted){const username=String(person.username||'').trim().toLowerCase(),account=accounts.get(username);if(!account||account.role!=='student')return json(res,400,{error:`人员账号 ${username||'未填写'} 不存在或不是学生账号。`});officers.push({username,title:String(person.title||'社团成员').slice(0,40),group:String(person.group||'社团成员').slice(0,60),name:String(account.profile?.name||account.displayName).slice(0,60)});}
+            next.clubs[session.clubId] = { ...old, about: String(own.about || '').slice(0, 1000), requirements: String(own.requirements || '').slice(0, 1000), officers, activities: Array.isArray(own.activities) ? own.activities.slice(0, 30).map(x=>String(x).slice(0,300)) : old.activities, plans: Array.isArray(own.plans) ? own.plans.slice(0, 30).map(x=>String(x).slice(0,300)) : old.plans };
+          }
         }
       }
       if (session.role !== 'admin') {
         const existing = new Map((previous.posts || []).map(post => [post.id, post]));
         const incoming = next.posts.slice(0, 500).map(post => {
           const old = existing.get(post.id);
-          if (old && old.authorId !== session.username && !old.seed) return old;
-          if (post.seed) {
+          if (old && old.authorId !== session.username && !old.seed) {
+            const likedBy = new Set(Array.isArray(old.likedBy) ? old.likedBy : []);
+            const clientLikes = new Set(Array.isArray(post.likedBy) ? post.likedBy : []);
+            if (clientLikes.has(session.username)) likedBy.add(session.username); else likedBy.delete(session.username);
+            const previousComments = Array.isArray(old.comments) ? old.comments : [];
+            const knownIds = new Set(previousComments.map(comment => comment.id).filter(Boolean));
+            const addedComments = (Array.isArray(post.comments) ? post.comments : []).filter(comment => !comment.id || !knownIds.has(comment.id)).filter(comment => comment.authorId === session.username).slice(0, 20).map(comment => ({ id: randomUUID(), author: session.displayName, authorId: session.username, text: String(comment.text || '').slice(0, 240), ...(comment.media?.id ? { media: comment.media } : {}), createdAt: Number(comment.createdAt) || Date.now() }));
+            return { ...old, likedBy: [...likedBy], likes: likedBy.size, comments: [...previousComments, ...addedComments] };
+          }
+          if (post.seed && old?.seed) {
             const authorId=SEED_AUTHORS.get(post.author)||old?.authorId||session.username;
             const account=DEMO_USERS.get(authorId);
             return {...post,authorId,author:post.author, ...(account?.role==='club'?{clubName:account.clubName}:{}),official:authorId==='admin'};
           }
-          if (session.role === 'club') return { ...post, authorId: session.username, author: session.clubName, clubName: session.clubName, tag: '社团招新', official: false };
-          if (post.tag === '社团招新') return { ...post, authorId: session.username, author: session.displayName, clubName: '', tag: '校园互助', official: false };
-          return { ...post, authorId: session.username, author: session.displayName, official: session.role === 'admin' && !!post.official };
+          const safeComments = (Array.isArray(post.comments) ? post.comments : []).slice(0, 200).map(comment => ({ ...comment, id: comment.id || randomUUID(), author: comment.authorId === session.username ? session.displayName : String(comment.author || '同学').slice(0, 40), authorId: comment.authorId === session.username ? session.username : '' }));
+          if (session.role === 'club') return { ...post, authorId: session.username, author: session.clubName, clubName: session.clubName, tag: '社团招新', official: false, comments: safeComments };
+          if (post.tag === '社团招新') return { ...post, authorId: session.username, author: session.displayName, clubName: '', tag: '校园互助', official: false, comments: safeComments };
+          return { ...post, authorId: session.username, author: session.displayName, official: false, comments: safeComments };
         });
         const keptIds = new Set(incoming.map(post => post.id));
         for (const post of previous.posts || []) if (post.authorId !== session.username && !keptIds.has(post.id)) incoming.push(post);
         next.posts = incoming;
       }
+      // Keep direct messages private and enforce friend requests on the server.
+      // The browser submits a snapshot, so only the signed-in user's permitted changes are merged.
+      const oldFriendships = previous.friendships || {}, desiredFriendships = next.friendships || {};
+      const oldRequests = Array.isArray(previous.friendRequests) ? previous.friendRequests : [];
+      const desiredRequests = Array.isArray(next.friendRequests) ? next.friendRequests : [];
+      const oldChats = previous.chats || {}, desiredChats = next.chats || {};
+      const everyone = new Map((await registeredUsers()).map(user => [user.username, user]));
+      const allowedPeers = new Set(Array.isArray(oldFriendships[session.username]) ? oldFriendships[session.username] : []);
+      if (session.role === 'student') {
+        for (const peer of Array.isArray(desiredFriendships[session.username]) ? desiredFriendships[session.username] : []) {
+          if (allowedPeers.has(peer)) continue;
+          const pending = oldRequests.some(item => item.from === peer && item.to === session.username);
+          if (pending && everyone.get(peer)?.role === 'student') {
+            allowedPeers.add(peer);
+            oldFriendships[peer] = [...new Set([...(oldFriendships[peer] || []), session.username])];
+          }
+        }
+        const wanted = new Set(Array.isArray(desiredFriendships[session.username]) ? desiredFriendships[session.username] : []);
+        for (const peer of [...allowedPeers]) if (!wanted.has(peer) && oldFriendships[session.username]?.includes(peer)) {
+          allowedPeers.delete(peer);
+          oldFriendships[peer] = (oldFriendships[peer] || []).filter(item => item !== session.username);
+          delete oldChats[[session.username, peer].sort().join('::')];
+        }
+      }
+      const requests = oldRequests.filter(item => item.from !== session.username && item.to !== session.username);
+      if (session.role === 'student') {
+        for (const item of desiredRequests.filter(item => item.from === session.username && item.to !== session.username)) {
+          if (!everyone.has(item.to) || everyone.get(item.to)?.role !== 'student' || allowedPeers.has(item.to)) continue;
+          requests.push({ from: session.username, to: item.to, createdAt: Number(item.createdAt) || Date.now() });
+        }
+        for (const item of oldRequests.filter(item => item.to !== session.username && item.from === session.username)) {
+          if (!desiredRequests.some(wanted => wanted.from === item.from && wanted.to === item.to)) continue;
+          if (!requests.some(wanted => wanted.from === item.from && wanted.to === item.to)) requests.push(item);
+        }
+      }
+      previous.friendships = { ...oldFriendships, [session.username]: [...allowedPeers] };
+      previous.friendRequests = requests;
+      const mergedChats = { ...oldChats };
+      if (session.role === 'student') for (const [chatId, submitted] of Object.entries(desiredChats)) {
+        const [a, b] = chatId.split('::'), peer = a === session.username ? b : b === session.username ? a : '';
+        if (!peer || !allowedPeers.has(peer) || !Array.isArray(submitted)) continue;
+        const oldMessages = Array.isArray(oldChats[chatId]) ? oldChats[chatId] : [];
+        if (submitted.length < oldMessages.length || oldMessages.some((message, index) => JSON.stringify(message) !== JSON.stringify(submitted[index]))) continue;
+        const appended = [];
+        for (const message of submitted.slice(oldMessages.length, oldMessages.length + 100)) {
+          const text = String(message.text || '').slice(0, 2000);
+          if (message.media?.id) {
+            const media = await pool?.query('SELECT owner FROM campus_media WHERE id=$1', [message.media.id]);
+            if (pool && media?.rows[0]?.owner !== session.username) continue;
+          }
+          appended.push({ from: session.username, to: peer, text, ...(message.type === 'club' ? { type: 'club', postId: String(message.postId || '').slice(0, 100), title: String(message.title || '').slice(0, 100), body: String(message.body || '').slice(0, 500) } : {}), ...(message.media ? { media: message.media } : {}), createdAt: Number(message.createdAt) || Date.now() });
+        }
+        mergedChats[chatId] = [...oldMessages, ...appended].slice(-2000);
+      }
+      previous.chats = mergedChats;
+      next.friendships = previous.friendships;
+      next.friendRequests = previous.friendRequests;
+      next.chats = previous.chats;
+      if (pool) for (const post of next.posts) {
+        if (post.authorId === session.username && post.media?.id) {
+          const media = await pool.query('SELECT owner FROM campus_media WHERE id=$1', [post.media.id]).catch(() => ({ rows: [] }));
+          if (media.rows[0]?.owner !== session.username) delete post.media;
+        }
+        for (const comment of post.comments || []) if (comment.authorId === session.username && comment.media?.id) {
+          const media = await pool.query('SELECT owner FROM campus_media WHERE id=$1', [comment.media.id]).catch(() => ({ rows: [] }));
+          if (media.rows[0]?.owner !== session.username) delete comment.media;
+        }
+      }
       next.updatedAt = new Date().toISOString();
       await writeCommunity(next);
+      const incomingById=new Map(next.posts.map(post=>[post.id,post]));
+      for(const old of previous.posts||[]){const current=incomingById.get(old.id);if(!current){await writeAudit(session,'post_deleted','post',old.id,{title:String(old.title||'').slice(0,80)});continue;}const currentComments=new Set((current.comments||[]).map(comment=>comment.id).filter(Boolean));for(const comment of old.comments||[])if(comment.id&&!currentComments.has(comment.id))await writeAudit(session,'comment_deleted','comment',comment.id,{postId:old.id});}
+      for(const post of next.posts)if(!(previous.posts||[]).some(old=>old.id===post.id))await writeAudit(session,post.official?'official_notice_published':'post_published',post.official?'notice':'post',post.id,{tag:post.tag||''});
       return json(res, 200, { ok: true, updatedAt: next.updatedAt });
     } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '社区内容保存失败。' }); }
   }
   if (req.url === '/api/clubs/apply' && req.method === 'POST') {
-    const session = sessionFor(req);
+    const session = await sessionFor(req);
     if (!session) return json(res, 401, { error: '请先登录。' });
     if (session.role !== 'student') return json(res, 403, { error: '入社申请仅对学生账号开放。' });
     try {
@@ -390,11 +595,12 @@ const server = createServer(async (req, res) => {
       if (previous) return json(res, 409, { error: '你已提交申请，社团处理后可再次申请。' });
       club.applications.push({ id: randomUUID(), username: session.username, displayName: session.displayName, content, status: 'pending', createdAt: new Date().toISOString() });
       await writeCommunity(community);
+      await writeAudit(session,'club_membership_requested','club',clubId,{});
       return json(res, 201, { ok: true });
     } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '申请暂时无法提交。' }); }
   }
   if (req.url.startsWith('/api/clubs/application/') && req.method === 'POST') {
-    const session = sessionFor(req);
+    const session = await sessionFor(req);
     if (!session) return json(res, 401, { error: '请先登录。' });
     if (!['club', 'admin'].includes(session.role)) return json(res, 403, { error: '只有社团负责人或管理老师可以处理申请。' });
     try {
@@ -409,17 +615,70 @@ const server = createServer(async (req, res) => {
       application.status = status;
       application.reviewedAt = new Date().toISOString();
       await writeCommunity(community);
+      await writeAudit(session,'club_application_reviewed','club_application',applicationId,{status});
       return json(res, 200, { ok: true });
     } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '申请处理失败。' }); }
   }
+  if(req.method==='GET'&&req.url==='/api/admin/pending-clubs'){
+    const session=await sessionFor(req);if(session?.role!=='admin')return json(res,403,{error:'只有管理老师可以审核社团账号。'});
+    const pending=pool?(await pool.query(`SELECT username,display_name AS "displayName",club_id AS "clubId",club_name AS "clubName",created_at AS "createdAt" FROM campus_users WHERE role='club' AND active=FALSE ORDER BY created_at DESC LIMIT 200`)).rows:(await registeredUsers()).filter(user=>user.role==='club'&&user.active===false);
+    return json(res,200,{users:pending});
+  }
+  if(req.method==='POST'&&req.url.startsWith('/api/admin/approve-club/')){
+    const session=await sessionFor(req);if(session?.role!=='admin')return json(res,403,{error:'只有管理老师可以审核社团账号。'});
+    const username=decodeURIComponent(req.url.slice('/api/admin/approve-club/'.length)).trim().toLowerCase();
+    if(pool){const updated=await pool.query("UPDATE campus_users SET active=TRUE WHERE username=$1 AND role='club' AND active=FALSE",[username]);if(!updated.rowCount)return json(res,404,{error:'没有找到待审核的社团账号。'});}
+    else {const users=await registeredUsers();const user=users.find(item=>item.username===username&&item.role==='club'&&item.active===false);if(!user)return json(res,404,{error:'没有找到待审核的社团账号。'});user.active=true;await writeUsers(users);}
+    const community=await readCommunity();const club=Object.values(community.clubs||{}).find(item=>item.owner===username);if(club)club.status='active';await writeCommunity(community);await writeAudit(session,'club_account_approved','user',username,{});return json(res,200,{ok:true});
+  }
+  if (req.method === 'POST' && req.url === '/api/reports') {
+    const session = await sessionFor(req);
+    if (!session) return json(res, 401, { error: '请先登录。' });
+    if (!pool) return json(res, 503, { error: '举报受理需要启用数据库。' });
+    try {
+      const body = await readBody(req), postId = String(body.postId || '').slice(0, 120), reason = String(body.reason || '').trim().slice(0, 500);
+      if (!postId || reason.length < 5) return json(res, 400, { error: '请填写帖子编号和至少 5 个字的举报原因。' });
+      const community = await readCommunity();
+      const post = (community.posts || []).find(item => item.id === postId);
+      if (!post) return json(res, 404, { error: '帖子不存在或已删除。' });
+      const id = randomUUID();
+      await pool.query('INSERT INTO campus_reports(id,reporter,post_id,reason) VALUES($1,$2,$3,$4)', [id, session.username, postId, reason]);
+      await writeAudit(session, 'content_report_submitted', 'post', postId, { reportId: id });
+      return json(res, 201, { ok: true, id });
+    } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '举报提交失败。' }); }
+  }
+  if(req.method==='GET'&&req.url==='/api/admin/audit'){
+    const session=await sessionFor(req);if(session?.role!=='admin')return json(res,403,{error:'只有管理老师可以查看操作记录。'});if(!pool)return json(res,200,{entries:[]});const {rows}=await pool.query('SELECT id,actor,action,target_type AS "targetType",target_id AS "targetId",details,created_at AS "createdAt" FROM campus_audit ORDER BY created_at DESC LIMIT 200');return json(res,200,{entries:rows});
+  }
+  if (req.method === 'GET' && req.url === '/api/admin/reports') {
+    const session = await sessionFor(req);
+    if (session?.role !== 'admin') return json(res, 403, { error: '只有管理老师可以查看举报。' });
+    if (!pool) return json(res, 200, { reports: [] });
+    const { rows } = await pool.query(`SELECT r.id,r.reporter,r.post_id AS "postId",r.reason,r.status,r.created_at AS "createdAt",r.reviewed_at AS "reviewedAt",r.reviewer,p.data->'posts' AS posts FROM campus_reports r LEFT JOIN campus_community p ON p.id=1 ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC LIMIT 100`);
+    return json(res, 200, { reports: rows.map(row => ({ ...row, post: (row.posts || []).find(post => post.id === row.postId) ? { title: row.posts.find(post => post.id === row.postId).title, author: row.posts.find(post => post.id === row.postId).author } : null, posts: undefined })) });
+  }
+  if (req.method === 'POST' && req.url.startsWith('/api/admin/report/')) {
+    const session = await sessionFor(req);
+    if (session?.role !== 'admin') return json(res, 403, { error: '只有管理老师可以处理举报。' });
+    if (!pool) return json(res, 503, { error: '举报处理需要启用数据库。' });
+    try {
+      const id = decodeURIComponent(req.url.slice('/api/admin/report/'.length)), body = await readBody(req);
+      const status = ['resolved','dismissed'].includes(body.status) ? body.status : '';
+      if (!status) return json(res, 400, { error: '请选择有效的处理结果。' });
+      const result = await pool.query('UPDATE campus_reports SET status=$1,reviewer=$2,reviewed_at=NOW() WHERE id=$3 AND status=\'pending\'', [status, session.username, id]);
+      if (!result.rowCount) return json(res, 404, { error: '没有找到待处理的举报。' });
+      await writeAudit(session, 'content_report_reviewed', 'report', id, { status });
+      return json(res, 200, { ok: true });
+    } catch (error) { return json(res, error.status || 500, { error: error.status ? error.message : '举报处理失败。' }); }
+  }
   if (req.method === 'POST' && req.url === '/api/chat') {
-    if (!sessionFor(req)) return json(res, 401, { error: '请先登录后再使用校园问答。' });
+    if (!await sessionFor(req)) return json(res, 401, { error: '请先登录后再使用校园问答。' });
     try { return await handleChat(req, res); }
     catch (error) { console.error('问答请求失败:', error.message); return json(res, error.status || 500, { error: error.status ? error.message : '问答服务暂时不可用，请稍后再试。' }); }
   }
   if (req.method === 'GET' && !req.url.startsWith('/api/')) return serveStatic(req, res);
   res.writeHead(404); res.end('Not found');
-});
+}
 
 async function retrieveCount() {
   try { return JSON.parse((await readTextFile(DATA_FILE, 'utf8')).replace(/^\uFEFF/, '')).length; }
@@ -428,6 +687,7 @@ async function retrieveCount() {
 
 const port = Number(process.env.PORT || 3000);
 const host = process.env.HOST || '0.0.0.0';
+if(pool)await pool.query(await readFileAsync(MIGRATION_FILE,'utf8'));
 await provisionAdmin();
 server.listen(port, host, () => console.log(`文理伴已启动: http://${host}:${port}`));
 
