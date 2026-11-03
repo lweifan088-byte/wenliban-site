@@ -137,7 +137,7 @@
       community = data;
       localStorage.setItem('wenliban.community.v1', JSON.stringify(community));
       sharedCommunityReady = true;
-      hydrateClubDirectory(data.clubs?.[activeUser?.clubId]);
+      Object.values(data.clubs||{}).forEach(hydrateClubDirectory);
       renderPosts(); renderAnnouncements(); renderAdmin(); renderFavorites();
       renderClubManager();
     }).catch(() => { sharedCommunityReady = true; });
@@ -267,6 +267,6 @@
     if (installPrompt) { installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $('#installPwaButton')?.remove(); }
     else alert('可在浏览器菜单中选择“添加到主屏幕”或“安装应用”。');
   });
-  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) navigator.serviceWorker.register('./sw.js').catch(() => {});
 })();
 

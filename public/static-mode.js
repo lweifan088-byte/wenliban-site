@@ -2,6 +2,7 @@
   const originalFetch = window.fetch.bind(window);
   const accountKey = 'wenliban.static.accounts.v1';
   const sessionKey = 'wenliban.static.session.v1';
+  const communityKey = 'wenliban.community.v1';
   const builtin = [
     { username: 'student01', password: 'wenli2026', displayName: '林同学', role: 'student' },
     { username: 'student02', password: 'wenli2026', displayName: '周同学', role: 'student' },
@@ -11,7 +12,7 @@
   const read = key => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
   const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
-  const publicUser = user => ({ username: user.username, displayName: user.displayName, role: user.role });
+  const publicUser = user => ({ username: user.username, displayName: user.displayName, role: user.role, clubId: user.clubId || null, clubName: user.clubName || null });
   const activeUser = () => { try { return JSON.parse(localStorage.getItem(sessionKey) || 'null'); } catch { return null; } };
   const digest = async text => [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].map(n => n.toString(16).padStart(2, '0')).join('');
   const answerFor = async question => {
@@ -53,14 +54,67 @@
       const username = String(body.username || '').trim().toLowerCase();
       const displayName = String(body.displayName || '').trim();
       const password = String(body.password || '');
+      const role = ['student','admin','club'].includes(body.role) ? body.role : 'student';
+      const clubName = String(body.clubName || '').trim();
       const users = read(accountKey);
       if (!/^[a-z0-9_-]{4,20}$/.test(username)) return json({ error: '账号需为 4–20 位字母、数字、下划线或短横线。' }, 400);
       if (displayName.length < 2 || displayName.length > 20) return json({ error: '昵称需为 2–20 个字符。' }, 400);
+      if (role === 'club' && (clubName.length < 2 || clubName.length > 40)) return json({ error: '请填写社团名称。' }, 400);
       if (password.length < 8 || password.length > 72) return json({ error: '密码需为 8–72 位。' }, 400);
       if ([...builtin, ...users].some(item => item.username === username)) return json({ error: '这个账号已被注册，请更换一个账号。' }, 409);
-      const user = { username, displayName, role: 'student', passwordHash: await digest(password) };
+      const user = { username, displayName, role, ...(role === 'club' ? {clubId:`club-${username}`,clubName} : {}), passwordHash: await digest(password) };
       users.push(user); write(accountKey, users);
+      if(role==='club'){
+        const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');community.clubs=community.clubs||{};
+        community.clubs[user.clubId]={id:user.clubId,name:clubName,founded:new Date().getFullYear()+' 年',about:'',requirements:'',officers:[],activities:[],plans:[],applications:[],owner:username};
+        localStorage.setItem(communityKey,JSON.stringify(community));
+      }
       const session = publicUser(user); localStorage.setItem(sessionKey, JSON.stringify(session)); return json({ user: session }, 201);
+    }
+    if (url.pathname === '/api/community' && method === 'GET') {
+      if(!activeUser())return json({error:'请先登录。'},401);
+      const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');community.clubs=community.clubs||{};
+      const visible=structuredClone(community);
+      for(const [id,club] of Object.entries(visible.clubs))if(activeUser().role!=='admin'&&!(activeUser().role==='club'&&activeUser().clubId===id))delete club.applications;
+      return json(visible);
+    }
+    if (url.pathname === '/api/community' && method === 'PUT') {
+      const user=activeUser();if(!user)return json({error:'请先登录。'},401);
+      const previous=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');
+      const next=body&&typeof body==='object'?body:{posts:[],clubs:{}};next.clubs=next.clubs||{};
+      if(user.role!=='admin')for(const [id,old] of Object.entries(previous.clubs||{})){
+        if(!next.clubs[id])next.clubs[id]=old;
+        if(user.role!=='club'||user.clubId!==id)next.clubs[id].applications=old.applications||[];
+      }
+      localStorage.setItem(communityKey,JSON.stringify(next));return json({ok:true});
+    }
+    if (url.pathname === '/api/profile' && method === 'PUT') {
+      const user=activeUser(); if(!user)return json({error:'请先登录。'},401);
+      const key=`wenliban.user.${user.username}`; let state={}; try{state=JSON.parse(localStorage.getItem(key)||'{}')}catch{}
+      state.profile=body.profile||{};localStorage.setItem(key,JSON.stringify(state));return json({ok:true});
+    }
+    if (url.pathname.startsWith('/api/profile/') && method === 'GET') {
+      const viewer=activeUser();if(!viewer)return json({error:'请先登录。'},401);
+      const username=decodeURIComponent(url.pathname.slice('/api/profile/'.length));
+      const user=[...builtin,...read(accountKey)].find(item=>item.username===username);if(!user)return json({error:'没有找到这个账号。'},404);
+      let state={};try{state=JSON.parse(localStorage.getItem(`wenliban.user.${username}`)||'{}')}catch{}
+      const profile=state.profile||{};const self=viewer.username===username;
+      const visible=self?profile:{...profile,qq:profile.visibility?.qq==='public'?profile.qq:'',wechat:profile.visibility?.wechat==='public'?profile.wechat:'',email:profile.visibility?.email==='public'?profile.email:''};
+      return json({user:publicUser(user),profile:visible});
+    }
+    if (url.pathname === '/api/clubs/apply' && method === 'POST') {
+      const user=activeUser();if(user?.role!=='student')return json({error:'入社申请仅对学生账号开放。'},403);
+      const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');community.clubs=community.clubs||{};
+      const club=community.clubs[body.clubId];if(!club)return json({error:'没有找到这个社团。'},404);
+      club.applications=club.applications||[];if(club.applications.some(item=>item.username===user.username&&item.status==='pending'))return json({error:'你已提交申请。'},409);
+      club.applications.push({id:crypto.randomUUID(),username:user.username,displayName:user.displayName,content:String(body.content||'').slice(0,2000),status:'pending',createdAt:new Date().toISOString()});localStorage.setItem(communityKey,JSON.stringify(community));return json({ok:true},201);
+    }
+    if (url.pathname.startsWith('/api/clubs/application/') && method === 'POST') {
+      const user=activeUser();if(!['club','admin'].includes(user?.role))return json({error:'没有处理申请的权限。'},403);
+      const id=decodeURIComponent(url.pathname.slice('/api/clubs/application/'.length));const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');
+      const club=Object.values(community.clubs||{}).find(item=>item.applications?.some(app=>app.id===id));
+      if(!club||user.role==='club'&&club.owner!==user.username)return json({error:'没有找到这条申请。'},404);
+      const app=club.applications.find(item=>item.id===id);app.status=body.status==='accepted'?'accepted':'rejected';localStorage.setItem(communityKey,JSON.stringify(community));return json({ok:true});
     }
     if (url.pathname === '/api/chat' && method === 'POST') {
       if (!activeUser()) return json({ error: '请先登录后再提问。' }, 401);
