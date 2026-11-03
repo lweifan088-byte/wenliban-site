@@ -25,3 +25,64 @@ body{background:linear-gradient(180deg,#efedff 0,#f8f6fb 340px,#f8f6fb 100%);col
 .club-application{margin:8px 0}
 .club-application p{margin:4px 0;font-size:12px;white-space:pre-wrap}
 
+/* Ambient motion layer: keeps the existing layout while giving the campus UI more depth. */
+body{isolation:isolate}
+body::before{content:"";position:fixed;inset:-20%;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 8% 12%,#b8adff38,transparent 30%),radial-gradient(ellipse at 92% 22%,#d1f37c24,transparent 26%),radial-gradient(ellipse at 60% 94%,#8b7cf51b,transparent 32%);filter:blur(24px);animation:ambient-drift 24s ease-in-out infinite alternate}
+.hero{isolation:isolate;transform:translateZ(0);box-shadow:0 22px 58px #5542aa24,0 4px 14px #5542aa10;animation:hero-arrive .85s cubic-bezier(.2,.75,.2,1) both}
+.hero::before{content:"";position:absolute;z-index:0;inset:-60% auto -60% -42%;width:32%;pointer-events:none;transform:rotate(18deg);background:linear-gradient(90deg,transparent,#ffffff18,transparent);animation:hero-sheen 9s ease-in-out 1s infinite}
+.hero h2{background:linear-gradient(100deg,#fff 0%,#f3efff 48%,#e2ffb8 100%);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 8px 30px #21195720}
+.hero-mark{animation:mark-arrive .9s .12s cubic-bezier(.2,.75,.2,1) both}
+.orb{position:relative;animation:orb-hover 6s ease-in-out infinite;box-shadow:0 0 42px #c9f36c30,0 0 100px #d5ccff26,inset -12px -15px 30px #21185c33}
+.orb::after{content:"";position:absolute;inset:-12px;border:1px solid #ffffff47;border-radius:50%;box-shadow:0 0 0 9px #ffffff0b;animation:orb-ring 4.5s ease-out infinite}
+.logo{position:relative;overflow:hidden;transition:transform .3s cubic-bezier(.2,.8,.2,1),box-shadow .3s}
+.logo::after{content:"";position:absolute;inset:-80% auto -80% -45%;width:35%;transform:rotate(24deg);background:linear-gradient(90deg,transparent,#ffffff77,transparent);animation:logo-glint 7s ease-in-out 1.2s infinite}
+.brand:hover .logo{transform:rotate(-7deg) scale(1.06);box-shadow:0 12px 28px #806be555}
+.welcome{animation:rise-in .58s .05s both}
+.grid-4 .metric{animation:rise-in .6s both;transition:transform .28s cubic-bezier(.2,.75,.2,1),box-shadow .28s,border-color .28s}
+.grid-4 .metric:nth-child(2){animation-delay:.07s}.grid-4 .metric:nth-child(3){animation-delay:.14s}.grid-4 .metric:nth-child(4){animation-delay:.21s}
+.metric:hover{transform:translateY(-4px);box-shadow:0 18px 36px #5143a51a;border-color:#d8d0ff}
+.metric-icon{transition:transform .3s,box-shadow .3s}
+.metric:hover .metric-icon{transform:rotate(-8deg) scale(1.1);box-shadow:0 5px 14px #7b6bea22}
+.quick{position:relative;overflow:hidden;transition:transform .26s cubic-bezier(.2,.8,.2,1),box-shadow .26s,border-color .26s}
+.quick::after{content:"";position:absolute;inset:0;pointer-events:none;opacity:0;background:radial-gradient(circle at var(--px,50%) var(--py,50%),#9283ff22,transparent 48%);transition:opacity .25s}
+.quick:hover{transform:translateY(-5px) scale(1.012);box-shadow:0 18px 40px #5143a51c;border-color:#d4ccf3}
+.quick:hover::after{opacity:1}.quick .qico{transition:transform .35s cubic-bezier(.2,.8,.2,1),box-shadow .3s}
+.quick:hover .qico{transform:translateY(-2px) rotate(-7deg) scale(1.08);box-shadow:0 8px 20px #6e5ddd22}
+.home-workbench{position:relative;overflow:hidden;animation:rise-in .72s .1s both;box-shadow:0 16px 44px #5b49a513,inset 0 1px #fff}
+.home-workbench::before{content:"";position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,transparent,#8f7bff,#c9f36c,#8f7bff,transparent);background-size:220% 100%;animation:edge-flow 8s linear infinite}
+.home-spark{animation:spark-pulse 3s ease-in-out infinite;box-shadow:0 0 0 0 #8170ed19}
+.home-assistant-form:focus-within{border-color:#a89df3;box-shadow:0 0 0 4px #9281ed18;transition:box-shadow .2s,border-color .2s}
+.home-assistant-form button,.btn-primary,.btn-line,.btn-soft,.btn-ghost{transition:transform .18s,filter .18s,box-shadow .2s}
+.home-assistant-form button:hover,.btn-primary:hover,.btn-line:hover,.btn-soft:hover,.btn-ghost:hover{transform:translateY(-2px);filter:brightness(1.035);box-shadow:0 8px 20px #4f3bad1c}
+button:active{transform:scale(.97)}
+.post{position:relative;overflow:hidden;transition:transform .24s,border-color .24s,box-shadow .24s}
+.post::before{content:"";position:absolute;inset:0 auto 0 0;width:2px;opacity:0;background:linear-gradient(180deg,#8b79ff,#c9f36c);transition:opacity .22s}
+.post:hover{transform:translateY(-2px);box-shadow:0 15px 34px #4b397614}
+.post:hover::before{opacity:1}
+.post .avatar,.comment-avatar{transition:transform .25s,box-shadow .25s}
+.post .avatar:hover,.comment-avatar:hover{transform:scale(1.08);box-shadow:0 0 0 3px #8675ed22}
+.view.active{animation:view-enter .34s cubic-bezier(.2,.75,.2,1) both}
+.section-head h2{letter-spacing:-.02em}
+.tag{transition:transform .2s,box-shadow .2s}.tag:hover{transform:translateY(-1px);box-shadow:0 4px 12px #6857d51c}
+.mobile-nav{border-top-color:#e8e2f7!important;backdrop-filter:blur(20px) saturate(1.25);-webkit-backdrop-filter:blur(20px) saturate(1.25)}
+.mobile-nav button{transition:color .2s,background .2s,transform .2s}
+.mobile-nav button.active span{animation:nav-pop .32s cubic-bezier(.2,.85,.25,1.35) both}
+.mobile-nav button.active{box-shadow:inset 0 0 0 1px #8a7aec1a,0 4px 16px #6555d911}
+.modal-backdrop.open .modal{animation:modal-arrive .28s cubic-bezier(.2,.8,.2,1) both}
+.toast.show{box-shadow:0 12px 34px #19133935}
+@keyframes ambient-drift{from{transform:translate3d(-1.2%,0,0) scale(1)}to{transform:translate3d(1.2%,1.6%,0) scale(1.04)}}
+@keyframes hero-arrive{from{opacity:0;transform:translateY(14px) scale(.992)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes mark-arrive{from{opacity:0;transform:translateY(8px) scale(.94)}to{opacity:1;transform:translateY(0) scale(1)}}
+@keyframes hero-sheen{0%,48%{left:-42%;opacity:0}58%{opacity:1}82%,100%{left:122%;opacity:0}}
+@keyframes orb-hover{0%,100%{transform:translateY(0) rotate(-3deg)}50%{transform:translateY(-9px) rotate(3deg)}}
+@keyframes orb-ring{0%{transform:scale(.92);opacity:.72}75%,100%{transform:scale(1.12);opacity:0}}
+@keyframes logo-glint{0%,58%{left:-45%;opacity:0}68%{opacity:.8}88%,100%{left:135%;opacity:0}}
+@keyframes rise-in{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes edge-flow{to{background-position:220% 0}}
+@keyframes spark-pulse{0%,100%{transform:rotate(0) scale(1);box-shadow:0 0 0 0 #8170ed00}50%{transform:rotate(8deg) scale(1.06);box-shadow:0 0 0 7px #8170ed0c}}
+@keyframes view-enter{from{opacity:.45;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
+@keyframes nav-pop{from{transform:scale(.78) translateY(2px)}to{transform:scale(1) translateY(0)}}
+@keyframes modal-arrive{from{opacity:0;transform:translateY(8px) scale(.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:760px){.hero{animation-duration:.65s}.hero::before{width:45%;animation-duration:11s}.orb{width:118px;height:118px}.grid-4 .metric:hover{transform:translateY(-2px)}.quick:hover{transform:translateY(-2px)}.mobile-nav button.active{transform:translateY(-2px)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+
