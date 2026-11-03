@@ -1,0 +1,9 @@
+{
+  "name": "wenliban-campus-companion",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.mjs" }
+}
+

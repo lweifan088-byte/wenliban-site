@@ -1,0 +1,14 @@
+{
+  "name": "文理伴——校园生活服务智能体",
+  "short_name": "文理伴",
+  "description": "面向西安文理学院学生的校园生活服务与互助社区",
+  "lang": "zh-CN",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f8f6fb",
+  "theme_color": "#6758d9",
+  "icons": [{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]
+}
+
