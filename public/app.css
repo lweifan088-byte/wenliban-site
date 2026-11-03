@@ -16,6 +16,11 @@ body{background:linear-gradient(180deg,#efedff 0,#f8f6fb 340px,#f8f6fb 100%);col
 .club-people{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px}
 .club-person,.club-application{display:grid;gap:3px;text-align:left;background:#f7faf7;border:1px solid var(--line);border-radius:12px;padding:11px;color:var(--ink)}
 .club-person small,.club-application small{color:var(--muted);font-size:10px}
+.club-roster-row{align-items:center}
+.club-roster-row>button{border:0;background:transparent;color:var(--green);display:grid;justify-items:end;padding:0}
+.club-roster-row>button small{font-size:10px;color:var(--muted)}
+.club-roster-details{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px;margin:10px 0 18px;padding:12px;border-radius:14px;background:#f7faf7}
+.club-roster-details[hidden]{display:none}
 .club-applications{margin-top:20px}
 .club-application{margin:8px 0}
 .club-application p{margin:4px 0;font-size:12px;white-space:pre-wrap}

@@ -7,8 +7,19 @@
     { username: 'student01', password: 'wenli2026', displayName: '林同学', role: 'student' },
     { username: 'student02', password: 'wenli2026', displayName: '周同学', role: 'student' },
     { username: 'student03', password: 'wenli2026', displayName: '陈同学', role: 'student' },
+    ...['杨','许','宋','赵','吴','郑','孙'].map((name,index)=>({username:`student${String(index+4).padStart(2,'0')}`,password:'wenli2026',displayName:`${name}同学`,role:'student'})),
+    { username: 'club_photo', password: 'wenli2026', displayName: '摄影社', role: 'club', clubId: 'photography', clubName: '摄影社' },
+    { username: 'club_volunteer', password: 'wenli2026', displayName: '青年志愿者协会', role: 'club', clubId: 'volunteer', clubName: '青年志愿者协会' },
+    { username: 'club_dance', password: 'wenli2026', displayName: '街舞社', role: 'club', clubId: 'dance', clubName: '街舞社' },
+    { username: 'club_reading', password: 'wenli2026', displayName: '读书会', role: 'club', clubId: 'reading', clubName: '读书会' },
     { username: 'admin', password: 'admin2026', displayName: '校园管理员', role: 'admin' }
   ];
+  const demoProfiles = Object.fromEntries([
+    ['student01','林同学','数字媒体技术','数字媒体技术 2601','摄影、短视频、校园记录'],['student02','周同学','汉语言文学','汉语言文学 2601','阅读、写作、校园活动'],['student03','陈同学','计算机科学与技术','计算机科学与技术 2601','摄影、后期、科技'],['student04','杨同学','学前教育','学前教育 2601','活动策划、运动、音乐'],['student05','许同学','视觉传达设计','视觉传达设计 2601','设计、摄影、手作'],['student06','宋同学','音乐学','音乐学 2601','音乐、舞蹈、演出'],['student07','赵同学','会计学','会计学 2601','阅读、摄影、旅行'],['student08','吴同学','英语','英语 2601','语言、舞蹈、交流'],['student09','郑同学','历史学','历史学 2601','历史、阅读、摄影'],['student10','孙同学','数学与应用数学','数学与应用数学 2601','运动、摄影、社团活动']
+  ].map(([username,name,major,klass,interests])=>[username,{name,major,klass,interests:interests.split('、'),qq:'',wechat:'',email:'',visibility:{qq:'private',wechat:'private',email:'private'}}]));
+  const seedClubs = () => Object.fromEntries([
+    ['photography','摄影社','club_photo','用镜头记录校园与日常。'],['volunteer','青年志愿者协会','club_volunteer','组织志愿服务与公益实践。'],['dance','街舞社','club_dance','分享舞蹈训练、演出与社团活动。'],['reading','读书会','club_reading','定期开展共读和主题交流。']
+  ].map(([id,name,owner,about])=>[id,{id,name,owner,about,requirements:'请介绍你的兴趣、可参与时间和联系方式。',officers:[],activities:[],plans:[],applications:[]} ]));
   const read = key => { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch { return []; } };
   const write = (key, value) => localStorage.setItem(key, JSON.stringify(value));
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -73,7 +84,9 @@
     }
     if (url.pathname === '/api/community' && method === 'GET') {
       if(!activeUser())return json({error:'请先登录。'},401);
-      const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');community.clubs=community.clubs||{};
+      const community=JSON.parse(localStorage.getItem(communityKey)||'{"posts":[],"clubs":{}}');community.clubs={...seedClubs(),...(community.clubs||{})};
+      for(const club of Object.values(community.clubs))if(!club.officers?.length){const people=club.id==='photography'?[['社长','student01','林同学','社团负责人'],['副社长','student02','周同学','活动与外联组'],['活动负责人','student04','杨同学','活动与外联组'],['摄影组长','student03','陈同学','摄影与后期组'],['后期组长','student05','许同学','摄影与后期组'],['摄影成员','student06','宋同学','摄影与后期组'],['成员','student07','赵同学','普通成员'],['成员','student08','吴同学','普通成员'],['成员','student09','郑同学','普通成员'],['成员','student10','孙同学','普通成员']]:[];club.officers=people.map(([title,username,name,group])=>({title,username,name,group}));}
+      localStorage.setItem(communityKey,JSON.stringify(community));
       const visible=structuredClone(community);
       for(const [id,club] of Object.entries(visible.clubs))if(activeUser().role!=='admin'&&!(activeUser().role==='club'&&activeUser().clubId===id))delete club.applications;
       return json(visible);
@@ -98,7 +111,7 @@
       const username=decodeURIComponent(url.pathname.slice('/api/profile/'.length));
       const user=[...builtin,...read(accountKey)].find(item=>item.username===username);if(!user)return json({error:'没有找到这个账号。'},404);
       let state={};try{state=JSON.parse(localStorage.getItem(`wenliban.user.${username}`)||'{}')}catch{}
-      const profile=state.profile||{};const self=viewer.username===username;
+      const profile=state.profile||demoProfiles[username]||{name:user.displayName,major:user.role==='admin'?'校园管理':'',klass:'',interests:[],qq:'',wechat:'',email:'',visibility:{qq:'private',wechat:'private',email:'private'}};const self=viewer.username===username;
       const visible=self?profile:{...profile,qq:profile.visibility?.qq==='public'?profile.qq:'',wechat:profile.visibility?.wechat==='public'?profile.wechat:'',email:profile.visibility?.email==='public'?profile.email:''};
       return json({user:publicUser(user),profile:visible});
     }

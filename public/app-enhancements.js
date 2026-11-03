@@ -128,18 +128,30 @@
   const updateAdminLink = () => { const link = $('#profileAdminShortcut'); if (link) link.hidden = activeUser?.role !== 'admin'; };
   const originalActivateUser = window.activateUser;
   let sharedCommunityReady = false;
+  const seededAccounts = {'迎新志愿者':'club_volunteer','小文':'student01','住宿同学':'student02','文理伴小助手':'student03','摄影社':'club_photo','新同学':'student04','校园管理端':'admin'};
+  const seededPeople = {'小文':'student01','住宿同学':'student02','小同学':'student02','周同学':'student02','陈同学':'student03','同学':'student01','林同学':'student01','杨同学':'student04','许同学':'student05','宋同学':'student06','赵同学':'student07','吴同学':'student08','郑同学':'student09','孙同学':'student10'};
+  function attachSeedAccounts(data){
+    let changed=false;
+    for(const post of data?.posts||[]){
+      if(!post.authorId&&seededAccounts[post.author]){post.authorId=seededAccounts[post.author];changed=true;}
+      for(const comment of post.comments||[])if(!comment.authorId&&seededPeople[comment.author]){comment.authorId=seededPeople[comment.author];changed=true;}
+    }
+    return changed;
+  }
   if (originalActivateUser) window.activateUser = user => {
     sharedCommunityReady = false;
     originalActivateUser(user);
     updateAdminLink();
     fetch('/api/community').then(response => response.ok ? response.json() : null).then(data => {
       if (!data || !Array.isArray(data.posts)) return;
+      const migratedSeedAccounts=attachSeedAccounts(data);
       community = data;
       localStorage.setItem('wenliban.community.v1', JSON.stringify(community));
       sharedCommunityReady = true;
       Object.values(data.clubs||{}).forEach(hydrateClubDirectory);
       renderPosts(); renderAnnouncements(); renderAdmin(); renderFavorites();
       renderClubManager();
+      if(migratedSeedAccounts)saveCommunity();
     }).catch(() => { sharedCommunityReady = true; });
   };
   const originalSaveCommunity = window.saveCommunity;
@@ -170,6 +182,8 @@
     return result;
   };
   if (originalOpenUserProfile) window.openUserProfile = (username, ...args) => {
+    const organization=clubByAccount?.(username);
+    if(organization){openClubProfile(organization.id,args[0]||'post');return;}
     const result = originalOpenUserProfile(username, ...args);
     fetch(`/api/profile/${encodeURIComponent(username)}`).then(response => response.ok ? response.json() : null).then(data => {
       if (!data?.profile) return;
@@ -182,16 +196,16 @@
     return result;
   };
   const profileView = $('#view-profile');
-  if (profileView && !$('#clubManagerCard')) profileView.insertAdjacentHTML('afterbegin', `<section class="card club-manager-card" id="clubManagerCard" hidden><div class="section-head"><div><h2>社团工作台</h2><p>维护社团公开资料、人员、招新条件和活动计划。</p></div><span class="tag">社团官方</span></div><div class="field"><label for="clubManagerAbout">社团介绍</label><textarea id="clubManagerAbout" maxlength="1000" rows="3"></textarea></div><div class="field"><label for="clubManagerRequirements">入社条件与申请材料</label><textarea id="clubManagerRequirements" maxlength="1000" rows="3" placeholder="例如：填写个人兴趣、可参与时间与联系方式"></textarea></div><div class="field"><label for="clubManagerOfficers">社团管理人员（每行：职务 | 账号 | 姓名）</label><textarea id="clubManagerOfficers" maxlength="3000" rows="4" placeholder="社长 | student01 | 林同学"></textarea></div><div class="field"><label for="clubManagerActivities">目前社团活动（每行一项）</label><textarea id="clubManagerActivities" maxlength="3000" rows="3"></textarea></div><div class="field"><label for="clubManagerPlans">社团计划（每行一项）</label><textarea id="clubManagerPlans" maxlength="3000" rows="3"></textarea></div><div class="actions"><button class="btn-primary" id="clubManagerSave" type="button">保存社团资料</button><button class="btn-line" id="clubManagerPost" type="button">发布社团帖子</button></div><div class="club-applications" id="clubApplications"></div></section>`);
+  if (profileView && !$('#clubManagerCard')) profileView.insertAdjacentHTML('afterbegin', `<section class="card club-manager-card" id="clubManagerCard" hidden><div class="section-head"><div><h2>社团工作台</h2><p>维护社团公开资料、人员、招新条件和活动计划。</p></div><span class="tag">社团官方</span></div><div class="field"><label for="clubManagerAbout">社团介绍</label><textarea id="clubManagerAbout" maxlength="1000" rows="3"></textarea></div><div class="field"><label for="clubManagerRequirements">入社条件与申请材料</label><textarea id="clubManagerRequirements" maxlength="1000" rows="3" placeholder="例如：填写个人兴趣、可参与时间与联系方式"></textarea></div><div class="field"><label for="clubManagerOfficers">社团管理人员（每行：职务 | 账号 | 姓名 | 人员分组）</label><textarea id="clubManagerOfficers" maxlength="3000" rows="4" placeholder="社长 | student01 | 林同学 | 社团负责人"></textarea></div><div class="field"><label for="clubManagerActivities">目前社团活动（每行一项）</label><textarea id="clubManagerActivities" maxlength="3000" rows="3"></textarea></div><div class="field"><label for="clubManagerPlans">社团计划（每行一项）</label><textarea id="clubManagerPlans" maxlength="3000" rows="3"></textarea></div><div class="actions"><button class="btn-primary" id="clubManagerSave" type="button">保存社团资料</button><button class="btn-line" id="clubManagerPost" type="button">发布社团帖子</button></div><div class="club-applications" id="clubApplications"></div></section>`);
 
   function currentClub() { return activeUser?.clubId ? community?.clubs?.[activeUser.clubId] : null; }
   function hydrateClubDirectory(club) {
     if (!club || !Array.isArray(clubDirectory)) return;
     let entry = clubDirectory.find(item => item.id === club.id);
     if (!entry) { entry = {id:club.id,name:club.name,founded:club.founded||'待补充',about:club.about||'',members:[]}; clubDirectory.push(entry); }
-    entry.name = club.name || entry.name; entry.founded = club.founded || entry.founded; entry.about = club.about || '';
+    entry.name = club.name || entry.name; entry.accountUsername=club.owner||entry.accountUsername; entry.founded = club.founded || entry.founded; entry.about = club.about || '';
     const officers = Array.isArray(club.officers) ? club.officers : [];
-    entry.members = officers.map(person => [`${person.title||'社团成员'} · ${person.name||person.username||''}`, person.username ? '查看主页' : '社团人员']);
+    if(officers.length){const known=new Map((entry.people||[]).map(person=>[person.username,person]));for(const person of officers)known.set(person.username,{...known.get(person.username),...person,group:person.group||known.get(person.username)?.group||'社团管理人员'});entry.people=[...known.values()];if(!entry.members?.length)entry.members=[['社团管理人员',`${entry.people.length} 人`]];}
   }
   function renderClubManager() {
     const card = $('#clubManagerCard');
@@ -206,7 +220,7 @@
     hydrateClubDirectory(club);
     $('#clubManagerAbout').value = club.about || '';
     $('#clubManagerRequirements').value = club.requirements || '';
-    $('#clubManagerOfficers').value = (club.officers||[]).map(p => `${p.title||''} | ${p.username||''} | ${p.name||''}`).join('\n');
+    $('#clubManagerOfficers').value = (club.officers||[]).map(p => `${p.title||''} | ${p.username||''} | ${p.name||''} | ${p.group||'社团管理人员'}`).join('\n');
     $('#clubManagerActivities').value = (club.activities||[]).join('\n');
     $('#clubManagerPlans').value = (club.plans||[]).join('\n');
     const applications = $('#clubApplications');
@@ -214,7 +228,7 @@
   }
   $('#clubManagerSave')?.addEventListener('click', () => {
     const club = currentClub(); if (!club) return;
-    const officers = $('#clubManagerOfficers').value.split(/\r?\n/).map(line => line.split('|').map(value=>value.trim())).filter(parts=>parts.some(Boolean)).slice(0,30).map(([title,username,name])=>({title:title||'社团成员',username:(username||'').toLowerCase(),name:name||username||'社团成员'}));
+    const officers = $('#clubManagerOfficers').value.split(/\r?\n/).map(line => line.split('|').map(value=>value.trim())).filter(parts=>parts.some(Boolean)).slice(0,30).map(([title,username,name,group])=>({title:title||'社团成员',username:(username||'').toLowerCase(),name:name||username||'社团成员',group:group||'社团管理人员'}));
     const list = selector => $(selector).value.split(/\r?\n/).map(value=>value.trim()).filter(Boolean).slice(0,30);
     Object.assign(club,{about:$('#clubManagerAbout').value.trim(),requirements:$('#clubManagerRequirements').value.trim(),officers,activities:list('#clubManagerActivities'),plans:list('#clubManagerPlans')});
     saveCommunity(); hydrateClubDirectory(club); renderClubManager(); toast('社团资料已保存');
@@ -235,16 +249,33 @@
   const previousClubRenderer = window.renderClubProfile;
   if (previousClubRenderer) window.renderClubProfile = (...args) => {
     const result=previousClubRenderer(...args);
-    const club=community?.clubs?.[selectedClubId];
+    const club=community?.clubs?.[selectedClubId]||clubById(selectedClubId);
     const card=$('#clubProfile .club-public-card');
     if(!club||!card)return result;
-    const officers=(club.officers||[]).map(p=>`<button class="club-person" type="button" ${p.username?`data-user-profile="${escText(p.username)}"`:''}><b>${escText(p.title||'社团成员')}</b><span>${escText(p.name||p.username||'')}</span>${p.username?'<small>查看主页 ↗</small>':''}</button>`).join('');
+    const directoryClub=clubById(club.id);
+    const officers=(club.officers||[]).map(p=>({group:p.group||'社团管理人员',...p}));
+    const people=Array.isArray(club.people)&&club.people.length?club.people:officers.length?officers:(directoryClub?.people||[]);
+    const members=Array.isArray(club.members)&&club.members.length?club.members:(directoryClub?.members||[]);
+    const memberBox=card.querySelector('.club-members');
+    if(memberBox){memberBox.innerHTML=members.map(([role,count])=>`<div class="club-roster-row"><span>${escText(role)}</span><button type="button" data-roster-group="${escText(club.id)}" data-roster-role="${escText(role)}"><b>${escText(count)}</b><small>查看人员 ↗</small></button></div>`).join('');memberBox.insertAdjacentHTML('afterend','<div class="club-roster-details" id="clubRosterDetails" hidden></div>');}
+    const namedPeople=people.map(p=>`<button class="club-person" type="button" ${p.username?`data-user-profile="${escText(p.username)}"`:''}><b>${escText(p.title||'社团成员')}</b><span>${escText(p.name||p.username||'')}</span>${p.username?'<small>查看主页 ↗</small>':''}</button>`).join('');
     const applyButton=activeUser?.role==='student'?`<button class="btn-primary" type="button" data-club-apply="${escText(club.id)}">申请加入社团</button>`:'';
-    const sections=`<section class="club-live-info"><h2 class="club-section-title">入社条件与申请材料</h2><p>${escText(club.requirements||'暂未设置申请条件。')}</p><h2 class="club-section-title">社团人员</h2><div class="club-people">${officers||'<p class="fineprint">社团管理人员信息待更新。</p>'}</div><h2 class="club-section-title">目前社团活动</h2><ul>${(club.activities||[]).map(x=>`<li>${escText(x)}</li>`).join('')||'<li>近期活动信息待更新</li>'}</ul><h2 class="club-section-title">社团计划</h2><ul>${(club.plans||[]).map(x=>`<li>${escText(x)}</li>`).join('')||'<li>社团计划待更新</li>'}</ul>${applyButton}</section>`;
+    const sections=`<section class="club-live-info"><h2 class="club-section-title">入社条件与申请材料</h2><p>${escText(club.requirements||'社团尚未设置申请资料要求。')}</p><h2 class="club-section-title">社团管理人员</h2><div class="club-people">${namedPeople||'<p class="fineprint">社团管理人员信息待更新。</p>'}</div><h2 class="club-section-title">目前社团活动</h2><ul>${(club.activities||[]).map(x=>`<li>${escText(x)}</li>`).join('')||'<li>近期活动信息待更新</li>'}</ul><h2 class="club-section-title">社团计划</h2><ul>${(club.plans||[]).map(x=>`<li>${escText(x)}</li>`).join('')||'<li>社团计划待更新</li>'}</ul>${applyButton}</section>`;
     card.insertAdjacentHTML('beforeend',sections);
     return result;
   };
   $('#clubProfile')?.addEventListener('click', async event => {
+    const rosterButton=event.target.closest('[data-roster-group]');
+    if(rosterButton){
+      const club=community?.clubs?.[rosterButton.dataset.rosterGroup]||clubById(rosterButton.dataset.rosterGroup);
+      const directoryClub=clubById(rosterButton.dataset.rosterGroup);
+      const people=[...(directoryClub?.people||[]),...(club?.people||[]),...(club?.officers||[])].reduce((all,person)=>{const i=all.findIndex(item=>item.username&&item.username===person.username);if(i<0)all.push(person);else all[i]={...all[i],...person,group:person.group||all[i].group};return all},[]);
+      const group=rosterButton.dataset.rosterRole;
+      const list=people.filter(person=>(person.group||'社团管理人员')===group||group==='社团管理人员');
+      const details=$('#clubRosterDetails');
+      if(details){details.hidden=false;details.innerHTML=list.length?list.map(person=>`<button class="club-person" type="button" ${person.username?`data-user-profile="${escText(person.username)}"`:''}><b>${escText(person.title||group)}</b><span>${escText(person.name||person.username||'')}</span><small>${person.username?'点击查看主页':'社团成员'}</small></button>`).join(''):'<p class="fineprint">该分组暂未登记可查看的成员主页。</p>';}
+      return;
+    }
     const button=event.target.closest('[data-club-apply]'); if(!button)return;
     const clubId=button.dataset.clubApply;
     const content=prompt('请按社团要求填写入社申请资料：'); if(content===null)return;
