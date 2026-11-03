@@ -30,9 +30,18 @@ const DEMO_USERS = new Map([
   ['student01', { password: 'wenli2026', role: 'student', displayName: '林同学' }],
   ['student02', { password: 'wenli2026', role: 'student', displayName: '周同学' }],
   ['student03', { password: 'wenli2026', role: 'student', displayName: '陈同学' }],
+  ...['杨','许','宋','赵','吴','郑','孙'].map((name,index)=>[`student${String(index+4).padStart(2,'0')}`,{password:'wenli2026',role:'student',displayName:`${name}同学`}]),
+  ['club_photo', { password: 'wenli2026', role: 'club', displayName: '摄影社', clubId: 'photography', clubName: '摄影社' }],
+  ['club_volunteer', { password: 'wenli2026', role: 'club', displayName: '青年志愿者协会', clubId: 'volunteer', clubName: '青年志愿者协会' }],
+  ['club_dance', { password: 'wenli2026', role: 'club', displayName: '街舞社', clubId: 'dance', clubName: '街舞社' }],
+  ['club_reading', { password: 'wenli2026', role: 'club', displayName: '读书会', clubId: 'reading', clubName: '读书会' }],
   ['admin', { password: 'admin2026', role: 'admin', displayName: '演示管理员' }]
 ]);
+const DEMO_PROFILES = new Map([
+  ['student01',{name:'林同学',major:'数字媒体技术',klass:'数字媒体技术 2601',interests:['摄影','短视频','校园记录']}],['student02',{name:'周同学',major:'汉语言文学',klass:'汉语言文学 2601',interests:['阅读','写作','校园活动']}],['student03',{name:'陈同学',major:'计算机科学与技术',klass:'计算机科学与技术 2601',interests:['摄影','后期','科技']}],['student04',{name:'杨同学',major:'学前教育',klass:'学前教育 2601',interests:['活动策划','运动','音乐']}],['student05',{name:'许同学',major:'视觉传达设计',klass:'视觉传达设计 2601',interests:['设计','摄影','手作']}],['student06',{name:'宋同学',major:'音乐学',klass:'音乐学 2601',interests:['音乐','舞蹈','演出']}],['student07',{name:'赵同学',major:'会计学',klass:'会计学 2601',interests:['阅读','摄影','旅行']}],['student08',{name:'吴同学',major:'英语',klass:'英语 2601',interests:['语言','舞蹈','交流']}],['student09',{name:'郑同学',major:'历史学',klass:'历史学 2601',interests:['历史','阅读','摄影']}],['student10',{name:'孙同学',major:'数学与应用数学',klass:'数学与应用数学 2601',interests:['运动','摄影','社团活动']}]
+].map(([username,profile])=>[username,{...profile,qq:'',wechat:'',email:'',visibility:{qq:'private',wechat:'private',email:'private'}}]));
 const sessions = new Map();
+const SEED_AUTHORS = new Map([['迎新志愿者','club_volunteer'],['小文','student01'],['住宿同学','student02'],['文理伴小助手','student03'],['摄影社','club_photo'],['新同学','student04'],['校园管理端','admin']]);
 const SESSION_TTL = 8 * 60 * 60 * 1000;
 function sessionFor(req) {
   const cookie = req.headers.cookie || '';
@@ -59,9 +68,11 @@ function verifyPassword(password, record) {
 }
 
 async function findUser(username) {
+  const users = await registeredUsers();
+  const registered = users.find(user => user.username === username) || null;
   const demo = DEMO_USERS.get(username);
-  if (demo && process.env.NODE_ENV !== 'production') return { ...demo, username };
-  return (await registeredUsers()).find(user => user.username === username) || null;
+  if (demo && (process.env.NODE_ENV !== 'production' || demo.role !== 'admin')) return { ...demo, ...registered, password: demo.password, username };
+  return registered;
 }
 
 async function provisionAdmin() {
@@ -85,7 +96,19 @@ function establishSession(res, user) {
 const publicUser = user => ({ username: user.username, role: user.role, displayName: user.displayName, clubId: user.clubId || null, clubName: user.clubName || null });
 async function readCommunity() {
   try { return JSON.parse(await readFileAsync(COMMUNITY_FILE, 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return { posts: [], clubs: {}, updatedAt: null }; throw error; }
+  catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const people = [
+      ['社长','student01','林同学','社团负责人'],['副社长','student02','周同学','活动与外联组'],['活动负责人','student04','杨同学','活动与外联组'],['摄影组长','student03','陈同学','摄影与后期组'],['后期组长','student05','许同学','摄影与后期组'],['摄影成员','student06','宋同学','摄影与后期组'],['成员','student07','赵同学','普通成员'],['成员','student08','吴同学','普通成员'],['成员','student09','郑同学','普通成员'],['成员','student10','孙同学','普通成员']
+    ].map(([title,username,name,group])=>({title,username,name,group}));
+    const makeClub=(id,name,about,officers)=>({id,name,owner:`club_${id==='photography'?'photo':id}`,founded:'2026 年',about,requirements:'请介绍你的兴趣、可参与时间和联系方式。',officers,activities:[],plans:[],applications:[]});
+    return { posts: [], clubs: {
+      photography: makeClub('photography','摄影社','用镜头记录校园与日常，欢迎摄影、短视频和视觉创作爱好者。',people),
+      volunteer: makeClub('volunteer','青年志愿者协会','组织志愿服务与公益实践，欢迎愿意参与校园和社区服务的同学。',[{title:'负责人',username:'student03',name:'陈同学',group:'社团负责人'},{title:'活动负责人',username:'student01',name:'林同学',group:'活动组'}]),
+      dance: makeClub('dance','街舞社','分享街舞训练、舞台演出和社团活动，新手也可以从基础练习开始。',[{title:'负责人',username:'student04',name:'杨同学',group:'社团负责人'},{title:'舞蹈组长',username:'student06',name:'宋同学',group:'舞蹈组'}]),
+      reading: makeClub('reading','读书会','定期开展共读和主题交流，欢迎不同专业的同学加入讨论。',[{title:'负责人',username:'student02',name:'周同学',group:'社团负责人'},{title:'共读主持',username:'student05',name:'许同学',group:'共读活动组'}])
+    }, updatedAt: null };
+  }
 }
 async function writeCommunity(value) {
   await mkdir(USER_DATA_DIR, { recursive: true });
@@ -218,7 +241,7 @@ const server = createServer(async (req, res) => {
     const username = decodeURIComponent(req.url.slice('/api/profile/'.length)).trim().toLowerCase();
     const target = await findUser(username);
     if (!target) return json(res, 404, { error: '没有找到这个账号。' });
-    const profile = target.profile && typeof target.profile === 'object' ? target.profile : {};
+    const profile = target.profile && typeof target.profile === 'object' ? target.profile : DEMO_PROFILES.get(username) || { name: target.displayName, major: target.role === 'admin' ? '校园管理' : '', klass: '', interests: [], visibility: { qq: 'private', wechat: 'private', email: 'private' } };
     const self = viewer.username === username;
     const visible = self ? profile : {
       name: profile.name,
@@ -247,8 +270,13 @@ const server = createServer(async (req, res) => {
         visibility: { qq: p.visibility?.qq === 'public' ? 'public' : 'private', wechat: p.visibility?.wechat === 'public' ? 'public' : 'private', email: p.visibility?.email === 'public' ? 'public' : 'private' }
       };
       const users = await registeredUsers();
-      const user = users.find(item => item.username === session.username);
-      if (!user) return json(res, 404, { error: '账号不存在。' });
+      let user = users.find(item => item.username === session.username);
+      if (!user) {
+        const demo = DEMO_USERS.get(session.username);
+        if (!demo || demo.role === 'admin' && process.env.NODE_ENV === 'production') return json(res, 404, { error: '账号不存在。' });
+        user = { username: session.username, displayName: demo.displayName, role: demo.role, ...(demo.clubId ? {clubId:demo.clubId,clubName:demo.clubName} : {}) };
+        users.push(user);
+      }
       user.profile = profile;
       await writeFile(USERS_FILE, JSON.stringify(users, null, 2), { encoding: 'utf8', mode: 0o600 });
       return json(res, 200, { ok: true });
@@ -326,7 +354,12 @@ const server = createServer(async (req, res) => {
         const existing = new Map((previous.posts || []).map(post => [post.id, post]));
         const incoming = next.posts.slice(0, 500).map(post => {
           const old = existing.get(post.id);
-          if (old && old.authorId !== session.username) return old;
+          if (old && old.authorId !== session.username && !old.seed) return old;
+          if (post.seed) {
+            const authorId=SEED_AUTHORS.get(post.author)||old?.authorId||session.username;
+            const account=DEMO_USERS.get(authorId);
+            return {...post,authorId,author:post.author, ...(account?.role==='club'?{clubName:account.clubName}:{}),official:authorId==='admin'};
+          }
           if (session.role === 'club') return { ...post, authorId: session.username, author: session.clubName, clubName: session.clubName, tag: '社团招新', official: false };
           if (post.tag === '社团招新') return { ...post, authorId: session.username, author: session.displayName, clubName: '', tag: '校园互助', official: false };
           return { ...post, authorId: session.username, author: session.displayName, official: session.role === 'admin' && !!post.official };
